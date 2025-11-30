@@ -25,7 +25,11 @@ SECRET_KEY = 'django-insecure-xr$7bzebj0$hktzo^nbz80$caxb((it6q$80%gy9s(6cmc9z9v
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    'localhost',
+    '127.0.0.1',
+    'real-estate-chatbot-backend-bdex.onrender.com'
+]
 
 
 # Application definition
@@ -57,6 +61,9 @@ MIDDLEWARE = [
 # CORS settings
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",  # Vite default port
+    "http://127.0.0.1:5173",
     "https://real-estate-chatbot-backend-bdex.onrender.com",
 ]
 
