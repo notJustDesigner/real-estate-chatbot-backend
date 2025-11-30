@@ -57,14 +57,11 @@ MIDDLEWARE = [
 # CORS settings
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:5173",  # Vite default port
-    "http://127.0.0.1:5173",
     "https://real-estate-chatbot-backend-bdex.onrender.com",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOW_ALL_ORIGINS = True  # Set to True for development only
+CORS_ALLOW_ALL_ORIGINS = False  # Set to True for development only
 
 # Cache configuration
 CACHES = {
