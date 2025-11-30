@@ -28,7 +28,7 @@ DEBUG = True
 ALLOWED_HOSTS = [
     'localhost',
     '127.0.0.1',
-    'real-estate-chatbot-backend-bdex.onrender.com'
+    '*.onrender.com',
 ]
 
 
@@ -65,6 +65,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",  # Vite default port
     "http://127.0.0.1:5173",
     "https://real-estate-chatbot-backend-bdex.onrender.com",
+    "https://real-estate-bot-4m1t.onrender.com",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
