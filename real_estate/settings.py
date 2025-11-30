@@ -28,7 +28,8 @@ DEBUG = True
 ALLOWED_HOSTS = [
     'localhost',
     '127.0.0.1',
-    '*.onrender.com',
+    'real-estate-chatbot-backend-bdex.onrender.com',
+    'real-estate-bot-4m1t.onrender.com',
 ]
 
 
