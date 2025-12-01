@@ -63,11 +63,21 @@ def analyze_query(request):
         locations = df['final location'].unique()
         mentioned_locations = []
         
+        # Common words to ignore
+        ignore_words = ['show', 'price', 'growth', 'for', 'compare', 'analyze', 'tell', 'about', 'the', 'and', 'in', 'of', 'demand', 'trend', 'trends']
+        
         for loc in locations:
             loc_lower = loc.lower()
-            # Check if location name is in query OR if query words are in location
-            if loc_lower in query or any(word in loc_lower for word in query.split() if len(word) > 3):
+            # Check if full location is in query
+            if loc_lower in query:
                 mentioned_locations.append(loc)
+            else:
+                # Check if significant words from query match location
+                query_words = [w for w in query.split() if len(w) > 3 and w not in ignore_words]
+                for word in query_words:
+                    if word in loc_lower:
+                        mentioned_locations.append(loc)
+                        break
         
         # Check if it's a general question (no specific location)
         if not mentioned_locations:
