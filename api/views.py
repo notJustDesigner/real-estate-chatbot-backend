@@ -106,6 +106,13 @@ def analyze_query(request):
         
         df = pd.read_json(data_json)
         
+        # Temp debug
+        amb_df = df[df['final location'] == 'Ambegaon Budruk']
+        if not amb_df.empty:
+            print(f"Ambegaon dtype for rate: {amb_df['flat - weighted average rate'].dtype}")
+            print(f"Sample rate: {amb_df['flat - weighted average rate'].iloc[0]}")
+            print(f"Year unique: {amb_df['year'].unique()}")
+        
         # Extract locations from query (exact "for [loc]" + fuzzy fallback)
         locations = df['final location'].unique().tolist()
         mentioned_locations = []
