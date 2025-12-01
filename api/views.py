@@ -240,7 +240,7 @@ def generate_gemini_summary(df, locations, query, query_zero_flags):
         - Make it sound like a true market analysis, not a data warning
         """
 
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         res = model.generate_content(prompt)
         return res.text.strip()
 
