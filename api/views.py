@@ -64,7 +64,7 @@ def analyze_query(request):
         mentioned_locations = []
         
         # Common words to ignore
-        ignore_words = ['show', 'price', 'growth', 'for', 'compare', 'analyze', 'tell', 'about', 'the', 'and', 'in', 'of', 'demand', 'trend', 'trends']
+        ignore_words = ['show', 'price', 'growth', 'for', 'compare', 'analyze', 'tell', 'about', 'the', 'and', 'in', 'of', 'demand', 'trend', 'trends', 'last', 'years', 'year']
         
         for loc in locations:
             loc_lower = loc.lower()
@@ -75,9 +75,12 @@ def analyze_query(request):
                 # Check if significant words from query match location
                 query_words = [w for w in query.split() if len(w) > 3 and w not in ignore_words]
                 for word in query_words:
-                    if word in loc_lower:
+                    if word in loc_lower and loc not in mentioned_locations:
                         mentioned_locations.append(loc)
                         break
+        
+        print(f"Query: {query}")
+        print(f"Found locations: {mentioned_locations}")
         
         # Check if it's a general question (no specific location)
         if not mentioned_locations:
@@ -101,14 +104,23 @@ def analyze_query(request):
         # Filter data for specific locations
         filtered_df = df[df['final location'].isin(mentioned_locations)]
         
+        if filtered_df.empty:
+            return Response({
+                'summary': f"No data found for: {', '.join(mentioned_locations)}",
+                'chart_data': [],
+                'table_data': []
+            })
+        
         # Prepare chart data
         chart_data = prepare_chart_data(filtered_df, mentioned_locations)
         
         # Generate summary using Gemini
         summary = generate_gemini_summary(filtered_df, mentioned_locations, query)
         
-        # Prepare table data
-        table_data = filtered_df.head(10).to_dict('records')
+        # Prepare table data (convert to list of dicts properly)
+        table_data = []
+        for idx, row in filtered_df.head(10).iterrows():
+            table_data.append(row.to_dict())
         
         return Response({
             'summary': summary,
@@ -119,7 +131,10 @@ def analyze_query(request):
         })
     
     except Exception as e:
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        print(f"Error in analyze_query: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return Response({'error': f'Server error: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 def handle_general_query(query, df, locations):
