@@ -59,25 +59,33 @@ def analyze_query(request):
         
         df = pd.read_json(data_json)
         
-        # Extract locations from query (fuzzy matching)
+        # Extract locations from query (improved fuzzy matching)
         locations = df['final location'].unique()
         mentioned_locations = []
         
         # Common words to ignore
-        ignore_words = ['show', 'price', 'growth', 'for', 'compare', 'analyze', 'tell', 'about', 'the', 'and', 'in', 'of', 'demand', 'trend', 'trends', 'last', 'years', 'year']
+        ignore_words = ['show', 'price', 'growth', 'for', 'compare', 'analyze', 'tell', 'about', 'the', 'and', 'in', 'of', 'demand', 'trend', 'trends', 'last', 'years', 'year', 'between', 'versus', 'vs']
+        
+        # Get query words (cleaned)
+        query_words = [w.strip() for w in query.split() if len(w) > 3 and w not in ignore_words]
         
         for loc in locations:
             loc_lower = loc.lower()
+            loc_words = loc_lower.split()
+            
             # Check if full location is in query
             if loc_lower in query:
-                mentioned_locations.append(loc)
+                if loc not in mentioned_locations:
+                    mentioned_locations.append(loc)
             else:
-                # Check if significant words from query match location
-                query_words = [w for w in query.split() if len(w) > 3 and w not in ignore_words]
-                for word in query_words:
-                    if word in loc_lower and loc not in mentioned_locations:
-                        mentioned_locations.append(loc)
-                        break
+                # Check if any significant word from query matches any word in location
+                for query_word in query_words:
+                    for loc_word in loc_words:
+                        # Match if query word is in location word (handles "ambegaon" matching "ambegaon budruk")
+                        if query_word in loc_word or loc_word in query_word:
+                            if loc not in mentioned_locations:
+                                mentioned_locations.append(loc)
+                            break
         
         print(f"Query: {query}")
         print(f"Found locations: {mentioned_locations}")
