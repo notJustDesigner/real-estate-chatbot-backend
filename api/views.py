@@ -59,33 +59,51 @@ def analyze_query(request):
         
         df = pd.read_json(data_json)
         
-        # Extract locations from query (improved fuzzy matching)
-        locations = df['final location'].unique()
+        # Extract locations from query (exact match after "for")
+        locations = df['final location'].unique().tolist()
         mentioned_locations = []
-        
-        # Common words to ignore
-        ignore_words = ['show', 'price', 'growth', 'for', 'compare', 'analyze', 'tell', 'about', 'the', 'and', 'in', 'of', 'demand', 'trend', 'trends', 'last', 'years', 'year', 'between', 'versus', 'vs']
-        
-        # Get query words (cleaned)
-        query_words = [w.strip() for w in query.split() if len(w) > 3 and w not in ignore_words]
-        
-        for loc in locations:
-            loc_lower = loc.lower()
-            loc_words = loc_lower.split()
-            
-            # Check if full location is in query
-            if loc_lower in query:
-                if loc not in mentioned_locations:
-                    mentioned_locations.append(loc)
+
+        # Make a copy to avoid mutating the original df (preserves cache integrity)
+        df_copy = df.copy()
+        # Convert locations in the DataFrame to lowercase and trim spaces
+        df_copy['final location'] = df_copy['final location'].str.lower().str.strip()
+
+        # Try to extract location after "for" (assumes format like "analyze for Wakad")
+        if 'for' in query:
+            try:
+                query_location = query.split('for')[1].strip().lower()  # Convert query location to lowercase and trim spaces
+                # Check if the query location is in the DataFrame's 'final location' column
+                if query_location in df_copy['final location'].values:
+                    # Get the location index
+                    location_index = df_copy[df_copy['final location'] == query_location].index[0]
+                   
+                    # Get the data for the location (3-row slice for context, e.g., trends)
+                    data = df_copy.iloc[location_index - 1 : location_index + 2]
+                    mentioned_locations.append(query_location)  # Add valid match
+                    filtered_df = data  # Use this instead of full filter (adjust as needed)
+                else:
+                    # No exact match - fallback to error (or integrate fuzzy here)
+                    mentioned_locations.append(query_location)
+                    error_message = f"No data available for location: {query_location}"
+                    return Response({'error': error_message}, status=status.HTTP_400_BAD_REQUEST)
+            except (IndexError, ValueError):
+                # Handle cases like no text after "for" or multiple "for"
+                error_message = "Invalid query format. Use 'analyze for [location]'."
+                return Response({'error': error_message}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            # No "for" in query - treat as general or error
+            if any(word in query for word in ['what', 'which', 'how', 'tell', 'explain', 'available', 'locations', 'areas', 'help']):
+                summary = handle_general_query(query, df, locations)
+                return Response({
+                    'summary': summary,
+                    'chart_data': [],
+                    'table_data': [],
+                    'total_records': 0,
+                    'locations': []
+                })
             else:
-                # Check if any significant word from query matches any word in location
-                for query_word in query_words:
-                    for loc_word in loc_words:
-                        # Match if query word is in location word (handles "ambegaon" matching "ambegaon budruk")
-                        if query_word in loc_word or loc_word in query_word:
-                            if loc not in mentioned_locations:
-                                mentioned_locations.append(loc)
-                            break
+                error_message = "No locations mentioned in the query. Use 'for [location]' format."
+                return Response({'error': error_message}, status=status.HTTP_400_BAD_REQUEST)
         
         print(f"Query: {query}")
         print(f"Found locations: {mentioned_locations}")
