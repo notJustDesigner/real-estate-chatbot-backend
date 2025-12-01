@@ -12,6 +12,31 @@ from django.core.cache import cache
 # Configure Gemini API
 genai.configure(api_key=os.environ.get('GEMINI_API_KEY', 'YOUR_GEMINI_API_KEY'))
 
+
+def flag_zero_locations(df, threshold=0.5):
+    """Flag locations with high zero/NaN rates in numeric columns"""
+    numeric_cols = [
+        'flat - weighted average rate',
+        'total_sales - igr',
+        'total units',
+        'residential_sold - igr'
+    ]
+    zero_flags = {}
+    for loc in df['final location'].unique():
+        loc_df = df[df['final location'] == loc]
+        zero_count = 0
+        total_possible = 0
+        for col in numeric_cols:
+            if col in loc_df.columns:
+                total_possible += 1
+                zeros_nans = loc_df[col].isna().sum() + (loc_df[col] == 0).sum()
+                zero_count += zeros_nans
+        zero_ratio = zero_count / total_possible if total_possible > 0 else 1
+        if zero_ratio > threshold:
+            zero_flags[loc] = f"{zero_ratio:.1%} of metrics are zero/missing"
+    return zero_flags
+
+
 @api_view(['POST'])
 @parser_classes([MultiPartParser, FormParser])
 def upload_file(request):
@@ -24,6 +49,27 @@ def upload_file(request):
         # Read Excel file
         df = pd.read_excel(file)
         
+        # Coerce numeric columns to handle strings like "N/A", "-", etc. -> NaN
+        numeric_cols = [
+            'flat - weighted average rate',
+            'total_sales - igr',
+            'total units',
+            'residential_sold - igr'
+            # Add more if needed, e.g., 'year'
+        ]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # Optional: Log bad values for debugging (remove in prod)
+        bad_counts = {col: df[col].isna().sum() for col in numeric_cols if col in df.columns}
+        print(f"Coerced bad values: {bad_counts}")
+        
+        # Flag zero-heavy locations
+        zero_flags = flag_zero_locations(df)
+        cache.set('zero_flags', json.dumps(zero_flags), timeout=3600)
+        print(f"Zero-flagged locations: {zero_flags}")
+        
         # Store data in cache (or database for production)
         data_json = df.to_json(orient='records')
         cache.set('real_estate_data', data_json, timeout=3600)
@@ -35,7 +81,8 @@ def upload_file(request):
             'message': f'Successfully loaded {len(df)} records',
             'total_records': len(df),
             'locations': locations[:20],  # First 20 locations
-            'columns': df.columns.tolist()
+            'columns': df.columns.tolist(),
+            'zero_flags': zero_flags  # Warn on upload
         })
     
     except Exception as e:
@@ -59,7 +106,7 @@ def analyze_query(request):
         
         df = pd.read_json(data_json)
         
-            # Extract locations from query (exact "for [loc]" + fuzzy fallback)
+        # Extract locations from query (exact "for [loc]" + fuzzy fallback)
         locations = df['final location'].unique().tolist()
         mentioned_locations = []
 
@@ -71,6 +118,7 @@ def analyze_query(request):
 
         # Fast path: exact match after "for" (with casing fix)
         exact_matched = False
+        filtered_df = pd.DataFrame()  # Initialize to avoid undefined
         if 'for' in query:
             try:
                 query_location = query.split('for')[1].strip().lower()  # Convert query location to lowercase and trim spaces
@@ -146,21 +194,29 @@ def analyze_query(request):
                     'table_data': []
                 })
         
-        # Filter data for specific locations
-        if mentioned_locations:
+        # Filter data for specific locations (unify: override if exact set it)
+        if not exact_matched:
             filtered_df = df[df['final location'].isin(mentioned_locations)]
-            if filtered_df.empty:
-                return Response({
-                    'summary': f"No data found for: {', '.join(mentioned_locations)}",
-                    'chart_data': [],
-                    'table_data': []
-                })
+        if filtered_df.empty:
+            return Response({
+                'summary': f"No data found for: {', '.join(mentioned_locations)}",
+                'chart_data': [],
+                'table_data': []
+            })
+        
+        # Load zero flags and check for this query
+        zero_flags_json = cache.get('zero_flags', '{}')
+        zero_flags = json.loads(zero_flags_json)
+        query_zero_flags = {loc: zero_flags.get(loc, '') for loc in mentioned_locations if loc in zero_flags}
+        warning = ""
+        if any('zero' in flag.lower() for flag in query_zero_flags.values()):
+            warning = f"Note: {', '.join([f'{loc}: {flag}' for loc, flag in query_zero_flags.items()])}. Data may be limited. "
         
         # Prepare chart data
         chart_data = prepare_chart_data(filtered_df, mentioned_locations)
         
         # Generate summary using Gemini
-        summary = generate_gemini_summary(filtered_df, mentioned_locations, query)
+        summary = generate_gemini_summary(filtered_df, mentioned_locations, query, query_zero_flags)
         
         # Prepare table data (convert to list of dicts properly)
         table_data = []
@@ -168,7 +224,7 @@ def analyze_query(request):
             table_data.append(row.to_dict())
         
         return Response({
-            'summary': summary,
+            'summary': warning + summary,
             'chart_data': chart_data,
             'table_data': table_data,
             'total_records': len(filtered_df),
@@ -211,6 +267,7 @@ Provide a helpful, concise answer (2-3 sentences). If they're asking about best 
         return response.text
         
     except Exception as e:
+        total_locations = len(locations)
         return f"I'm here to help with real estate analysis! I have data for {total_locations} locations. Try asking:\n• 'What locations are available?'\n• 'Analyze Wakad'\n• 'Compare Aundh and Akurdi'\n• 'Which area has highest prices?'"
 
 
@@ -225,10 +282,12 @@ def prepare_chart_data(df, locations):
             for loc in locations:
                 loc_data = df[(df['year'] == year) & (df['final location'] == loc)]
                 if not loc_data.empty:
-                    # Handle NaN values
-                    avg_rate = loc_data['flat - weighted average rate'].iloc[0]
-                    if pd.notna(avg_rate):
+                    # Use mean for robustness (handles NaNs/zeros/multiples)
+                    avg_rate = loc_data['flat - weighted average rate'].mean()
+                    if pd.notna(avg_rate) and avg_rate > 0:  # Skip pure zeros if desired
                         year_data[loc] = round(float(avg_rate))
+                    else:
+                        year_data[loc] = 0  # Or None for gaps
             chart_data.append(year_data)
         
         print(f"Chart data prepared: {chart_data}")
@@ -240,7 +299,7 @@ def prepare_chart_data(df, locations):
         return []
 
 
-def generate_gemini_summary(df, locations, query):
+def generate_gemini_summary(df, locations, query, query_zero_flags):
     """Generate summary using Gemini AI"""
     try:
         # Prepare data summary for Gemini
@@ -272,13 +331,15 @@ User Query: {query}
 Data:
 {json.dumps(data_summary, indent=2)}
 
+Additional Context: {json.dumps(query_zero_flags)}  # E.g., {'Ambegaon Budruk': '75.0% zero/missing'}
+
 Provide insights about:
-- Price trends
-- Sales volume
+- Price trends (note if 0/missing indicates low activity)
+- Sales volume (0 units = no transactions)
 - Market demand
 - Comparison if multiple locations
 
-Keep it concise, professional, and actionable. Use Indian Rupee format (₹ and Crores)."""
+If data is mostly 0 or missing, say 'Limited recorded activity—consider recent market updates.' Keep it concise, professional, and actionable. Use Indian Rupee format (₹ and Crores)."""
 
         # Call Gemini API
         model = genai.GenerativeModel('gemini-pro')
@@ -307,22 +368,43 @@ def generate_fallback_summary(df, locations, query):
         latest_year = loc_data['year'].max()
         latest_data = loc_data[loc_data['year'] == latest_year].iloc[0]
         
-        avg_price = round(latest_data['flat - weighted average rate']) if pd.notna(latest_data['flat - weighted average rate']) else 0
-        total_sales = (latest_data['total_sales - igr'] / 10000000) if pd.notna(latest_data['total_sales - igr']) else 0
-        total_units = round(latest_data['total units']) if pd.notna(latest_data['total units']) else 0
+        avg_price = pd.to_numeric(latest_data['flat - weighted average rate'], errors='coerce')
+        if pd.notna(avg_price) and avg_price > 0:
+            avg_price = round(avg_price)
+            price_note = ""
+        else:
+            avg_price = 0
+            price_note = " (no price data available)"
+        
+        total_sales_val = pd.to_numeric(latest_data['total_sales - igr'], errors='coerce')
+        total_sales = (total_sales_val / 10000000) if pd.notna(total_sales_val) else 0
+        
+        total_units = pd.to_numeric(latest_data['total units'], errors='coerce')
+        if pd.notna(total_units) and total_units > 0:
+            total_units = round(total_units)
+            units_note = ""
+        else:
+            total_units = 0
+            units_note = " (no units sold)"
         
         if 'compare' in query and len(locations) > 1:
             summary = f"Comparison for {' vs '.join(locations)}:\n"
+            latest_year = df['year'].max()  # Assume same year
             for l in locations:
                 l_data = df[(df['final location'] == l) & (df['year'] == latest_year)]
                 if not l_data.empty:
                     l_row = l_data.iloc[0]
-                    l_price = round(l_row['flat - weighted average rate']) if pd.notna(l_row['flat - weighted average rate']) else 0
-                    l_units = round(l_row['total units']) if pd.notna(l_row['total units']) else 0
+                    l_price = pd.to_numeric(l_row['flat - weighted average rate'], errors='coerce')
+                    l_price = round(l_price) if pd.notna(l_price) and l_price > 0 else 0
+                    l_units = pd.to_numeric(l_row['total units'], errors='coerce')
+                    l_units = round(l_units) if pd.notna(l_units) and l_units > 0 else 0
                     summary += f"{l}: ₹{l_price}/sqft, {l_units} units\n"
             return summary
         
-        return f"Analysis for {loc}: Average flat price is ₹{avg_price}/sqft ({int(latest_year)}). Total sales: ₹{total_sales:.2f} Cr with {total_units} units sold. Market shows steady activity in this locality."
+        if total_units == 0:
+            return f"Analysis for {loc}: No units sold in {int(latest_year)}{price_note}. Market shows no activity this year—consider recent updates."
+        else:
+            return f"Analysis for {loc}: Average flat price is ₹{avg_price}/sqft{price_note} ({int(latest_year)}). Total sales: ₹{total_sales:.2f} Cr with {total_units} units sold{units_note}. Market shows steady activity in this locality."
     
     except Exception as e:
         print(f"Error in fallback summary: {str(e)}")
